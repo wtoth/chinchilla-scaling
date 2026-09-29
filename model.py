@@ -66,13 +66,18 @@ class TransformerLayer(nnx.Module):
         return out
 
 
-
 class MLP(nnx.Module):
-    def __init__(self):
-        pass
+    def __init__(self, input_dim: int, ffw_dim: int, output_dim: int, rngs: nnx.Rngs):
+        self.layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=input_dim, rngs=rngs)
+        self.linear1 = nnx.Linear(input_dim, ffw_dim, rngs=rngs)
+        self.linear2 = nnx.Linear(ffw_dim, output_dim, rngs=rngs)
 
     def __call__(self, inputs):
-        pass
+        input_norm = self.layer_norm(inputs)
+        x = jax.nn.relu(self.linear1(input_norm))
+        out = self.linear2(x)
+        return out
+        
 
 class MoE(nnx.Module):
     def __init__(self):

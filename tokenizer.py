@@ -35,6 +35,6 @@ def tokenizer(input, padded_length: int = 12):
     return tokenized_question, answer
 
 
-test = "550 + 43 = 593"
+# test = "550 + 43 = 593"
 
-print(tokenizer(test))
+# print(tokenizer(test))

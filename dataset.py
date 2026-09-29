@@ -19,7 +19,6 @@ class ChinchillaDataset(Dataset):
         return problem, answer
 
 
-
-dataset = ChinchillaDataset("data/val.csv")
-dataloader = DataLoader(dataset, batch_size=10)
-print(next(iter(dataloader)))
+# dataset = ChinchillaDataset("data/val.csv")
+# dataloader = DataLoader(dataset, batch_size=10)
+# print(next(iter(dataloader)))

@@ -116,11 +116,11 @@ class TokenAndPositionalEmbeddings(nnx.Module):
 # testing
 batch = 5
 seq_len = 12
-rngs=nnx.Rngs(0)
 emb_dim=4
 num_heads=2
 ffw_dim=8
 output_dim = emb_dim
+rngs=nnx.Rngs(0)
 
 test_batch = jnp.ones([batch, seq_len, emb_dim]) # [4, 12, 4]
 

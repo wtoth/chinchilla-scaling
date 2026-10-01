@@ -14,7 +14,6 @@ class ChinchillaDataset(Dataset):
 
     def __getitem__(self, idx):
         problem_statement = self.problems.loc[idx, "problems"]
-        print(problem_statement)
         problem, answer = tokenizer.tokenizer(problem_statement)
         return problem, answer
 

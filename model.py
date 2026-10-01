@@ -6,7 +6,7 @@ import optax
 
 # ffw should equal embed_dim for simplicity
 
-class BabyChilla(nnx.Module):
+class BabyChillaModel(nnx.Module):
     def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, layers: int, rngs: nnx.Rngs, 
                  MoE: bool= False, max_len: int=12, vocab_size: int=12, output_size: int=1998, 
                  num_experts: int=12, active_experts: int=4):
@@ -63,8 +63,8 @@ class TransformerLayer(nnx.Module):
         b, t, d = inputs.shape
         input_norm = self.layer_norm(inputs)
         q = self.q_proj(input_norm)
-        k = self.q_proj(input_norm)
-        v = self.q_proj(input_norm)
+        k = self.q_proj(input_norm) # FIXME
+        v = self.q_proj(input_norm) # FIXME
 
         q = q.reshape(b, t, self.num_heads, self.head_dim) # BTD -> BTNH
         k = k.reshape(b, t, self.num_heads, self.head_dim) # BSD -> BSNH
@@ -113,37 +113,37 @@ class TokenAndPositionalEmbeddings(nnx.Module):
 
 
 
-# testing
-batch = 5
-seq_len = 12
-emb_dim=4
-num_heads=2
-ffw_dim=8
-output_dim = emb_dim
-rngs=nnx.Rngs(0)
+# # testing
+# batch = 5
+# seq_len = 12
+# emb_dim=4
+# num_heads=2
+# ffw_dim=8
+# output_dim = emb_dim
+# rngs=nnx.Rngs(0)
 
-test_batch = jnp.ones([batch, seq_len, emb_dim]) # [4, 12, 4]
+# test_batch = jnp.ones([batch, seq_len, emb_dim]) # [4, 12, 4]
 
-# transformer layer
-transformer_layer = TransformerLayer(emb_dim, num_heads, rngs=rngs)
-print(transformer_layer(test_batch).shape)
+# # transformer layer
+# transformer_layer = TransformerLayer(emb_dim, num_heads, rngs=rngs)
+# print(transformer_layer(test_batch).shape)
 
-# mlp layer
-mlp = MLP(input_dim=emb_dim, ffw_dim=ffw_dim, output_dim=output_dim, rngs=rngs)
-print(mlp(test_batch).shape)
+# # mlp layer
+# mlp = MLP(input_dim=emb_dim, ffw_dim=ffw_dim, output_dim=output_dim, rngs=rngs)
+# print(mlp(test_batch).shape)
 
-# transformer block (transformer + mlp)
-transformer_block = TransformerBlock(emb_dim, num_heads, ffw_dim, False, 0, 0, rngs=rngs)
-print(transformer_block(test_batch).shape)
+# # transformer block (transformer + mlp)
+# transformer_block = TransformerBlock(emb_dim, num_heads, ffw_dim, False, 0, 0, rngs=rngs)
+# print(transformer_block(test_batch).shape)
 
-# mlp babychilla 
-full_test_batch = jnp.ones([batch, seq_len], dtype=int) # [4, 12] so that the embedding layers work
+# # mlp babychilla 
+# full_test_batch = jnp.ones([batch, seq_len], dtype=int) # [4, 12] so that the embedding layers work
 
-babychilla_mlp = BabyChilla(embed_dim=emb_dim, num_heads=num_heads, ffw_dim=ffw_dim, layers=2, rngs=rngs)
-print(babychilla_mlp(full_test_batch).shape)
-print(babychilla_mlp(full_test_batch))
+# babychilla_mlp = BabyChillaModel(embed_dim=emb_dim, num_heads=num_heads, ffw_dim=ffw_dim, layers=2, rngs=rngs)
+# print(babychilla_mlp(full_test_batch).shape)
+# print(babychilla_mlp(full_test_batch))
 
 # moe babychilla 
-# babychilla_mlp = BabyChilla(embed_dim=emb_dim, num_heads=num_heads, ffw_dim=ffw_dim, layers=2, rngs=rngs, MoE=True)
+# babychilla_mlp = BabyChillaModel(embed_dim=emb_dim, num_heads=num_heads, ffw_dim=ffw_dim, layers=2, rngs=rngs, MoE=True)
 # print(babychilla_mlp(test_batch).shape)
 # print(babychilla_mlp(test_batch))

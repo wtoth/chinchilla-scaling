@@ -1,5 +1,7 @@
-from model import BabyChilla
-import flax.nnx as nnx
+from flax import nnx
+
+from model import BabyChillaModel
+from train import BabyChilla
 
 
 def main():
@@ -9,9 +11,13 @@ def main():
     num_heads=2
     ffw_dim=8
     output_dim = emb_dim
+    num_layers = 2
+    num_epochs = 5
     rngs=nnx.Rngs(0)
 
-    print("Hello from chinchilla-scaling!")
+    model_instance = BabyChillaModel(emb_dim, num_heads, ffw_dim, num_layers, rngs=rngs)
+    model = BabyChilla(model=model_instance, batch_size=batch, num_epochs=num_epochs)
+    model.train()
 
 
 if __name__ == "__main__":

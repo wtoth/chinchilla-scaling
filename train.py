@@ -36,9 +36,10 @@ class BabyChilla:
         for epoch in range(self.num_epochs):
             # start_time = time.time()
             for i, (inputs, labels) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}")):
+                # print(inputs, labels)
                 inputs, labels = jnp.array(inputs, dtype=int), jnp.array(labels, dtype=int) # convert to jax.numpy arrays
             # for batch in train_dataloader:
-                if len(inputs) % len(jax.devices()) != 0:
+                if len(inputs) % len(jax.devices()) != 0: 
                     continue  # skip the remaining elements
                 # input_batch = jnp.stack(batch).T # ???????S
                 # target_batch = prep_target_batch(input_batch) # ???????
@@ -67,9 +68,9 @@ class BabyChilla:
 
     def loss_fn(self, model, batch):
         logits = model(batch[0])
-        print(logits)
+        print(nnx.softmax(logits, axis=-1))
         loss = optax.softmax_cross_entropy_with_integer_labels(logits=logits, labels=batch[1]).mean()
-        print(loss)
+        # print(loss)
         return loss, logits
 
     # Define the training step with the `flax.nnx.jit` transformation decorator.

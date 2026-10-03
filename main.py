@@ -5,11 +5,11 @@ from train import BabyChilla
 
 
 def main():
-    batch = 5
+    batch = 64
     seq_len = 12
-    emb_dim=4
-    num_heads=2
-    ffw_dim=8
+    emb_dim=128
+    num_heads=8
+    ffw_dim=128
     output_dim = emb_dim
     num_layers = 2
     num_epochs = 5

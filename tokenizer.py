@@ -10,15 +10,16 @@ from jax import jit
 
 # should " "
 operations = {
-    " ":9, # should space be -1? This might be a stronger signal for the model
-    "+":10,
-    "=":11
+    " ":10, # should space be -1? This might be a stronger signal for the model
+    "+":11,
+    "=":12, 
+    "[Pad]":13
 }
 
 # padded_length = 
-def tokenizer(input, padded_length: int = 12):
+def tokenizer(input, padded_length: int = 11):
     """
-    padded_length = 12 not 13 because I am removing the space between = and the answer
+    padded_length = 11 not 12 because I am removing the space between = and the answer
     """
     tokenized_question = []
     split_input = input.split()
@@ -30,7 +31,7 @@ def tokenizer(input, padded_length: int = 12):
         else:
             tokenized_question.append(operations[input[i]])
     if len(tokenized_question) < padded_length:
-        padding = (padded_length - len(tokenized_question)) * [float("-inf")]
+        padding = (padded_length - len(tokenized_question)) * [operations["[Pad]"]]
         tokenized_question.extend(padding) 
     return tokenized_question, answer
 

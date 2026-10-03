@@ -8,7 +8,7 @@ import optax
 
 class BabyChillaModel(nnx.Module):
     def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, layers: int, rngs: nnx.Rngs, 
-                 MoE: bool= False, max_len: int=12, vocab_size: int=12, output_size: int=1998, 
+                 MoE: bool= False, max_len: int=11, vocab_size: int=14, output_size: int=1999, 
                  num_experts: int=12, active_experts: int=4):
         self.token_pos_emb = TokenAndPositionalEmbeddings(embed_dim, rngs=rngs, max_len=max_len, vocab_size=vocab_size)
         self.transformer_blocks = nnx.Sequential(*[TransformerBlock(embed_dim=embed_dim,
@@ -19,13 +19,17 @@ class BabyChillaModel(nnx.Module):
                                                                     active_experts=active_experts,
                                                                     rngs=rngs) 
                                                                     for _ in range(layers)])
+        self.final_norm = nnx.LayerNorm(embed_dim, rngs=rngs)
         self.output_layer = nnx.Linear(in_features=embed_dim, out_features=output_size, rngs=rngs)
 
     def __call__(self, x):
+        # print(x)
         x = self.token_pos_emb(x)
+        # print(f"embeddings: {x}")
         x = self.transformer_blocks(x)
         # retrieve only one of the output points since we are doing classification instead of next token prediction
         # so the output is [num_batches, num_classes]
+        #print(f"post transformer blocks {x}")
         x = x[:, 0] # idea from https://flax.readthedocs.io/en/stable/examples/vit_training.html
         out = self.output_layer(x)
         return out
@@ -41,8 +45,11 @@ class TransformerBlock(nnx.Module):
             self.ffw = MoE(ffw_dim, num_experts, active_experts)
 
     def __call__(self, inputs):
+        #print(inputs)
         transformer_output = self.transformer(inputs) + inputs # residual connection
+        #print(f"Transformer output: {transformer_output}")
         ffw_output = self.ffw(transformer_output) + transformer_output # ffw residual connection? 
+        #print(f"ffw output: {ffw_output}")
         return ffw_output
 
 class TransformerLayer(nnx.Module):
@@ -63,18 +70,18 @@ class TransformerLayer(nnx.Module):
         b, t, d = inputs.shape
         input_norm = self.layer_norm(inputs)
         q = self.q_proj(input_norm)
-        k = self.q_proj(input_norm) # FIXME
-        v = self.q_proj(input_norm) # FIXME
+        k = self.k_proj(input_norm)
+        v = self.v_proj(input_norm)
 
         q = q.reshape(b, t, self.num_heads, self.head_dim) # BTD -> BTNH
         k = k.reshape(b, t, self.num_heads, self.head_dim) # BSD -> BSNH
         v = v.reshape(b, t, self.num_heads, self.head_dim) # BSD -> BSNH
 
-        qk = nnx.softmax(jnp.einsum("btnh, bsnh -> bnts", q, k) / d**0.5)
+        qk = nnx.softmax(jnp.einsum("btnh, bsnh -> bnts", q, k) / k.shape[-1]**0.5, axis=-1)
         qkv = jnp.einsum("bnts, bsnh -> bnth", qk, v)
 
         qkv = jnp.transpose(qkv, axes=(0, 2, 1, 3)) # BNTH -> BTNH
-        qkv = qkv.reshape(b, t, d)
+        qkv = qkv.reshape(b, t, d) # BTNH -> BTD
         out = self.output(qkv)
         return out
 
@@ -101,7 +108,7 @@ class MoE(nnx.Module):
 
 
 class TokenAndPositionalEmbeddings(nnx.Module):
-    def __init__(self, embed_dim: int, rngs: nnx.Rngs, max_len: int=12, vocab_size: int=12):
+    def __init__(self, embed_dim: int, rngs: nnx.Rngs, max_len: int=11, vocab_size: int=12):
             self.token_emb = nnx.Embed(num_embeddings=vocab_size, features=embed_dim, rngs=rngs)
             self.pos_emb = nnx.Embed(num_embeddings=max_len, features=embed_dim, rngs=rngs)
     

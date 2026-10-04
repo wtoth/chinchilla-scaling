@@ -18,13 +18,20 @@ class BabyChilla:
         self.metrics = nnx.MultiMetric(
             loss=nnx.metrics.Average("loss"),
         )
+        self.val_metrics = nnx.MultiMetric(
+            loss=nnx.metrics.Average("loss"),
+        )
 
     def train(self, dataset="data/train.csv"):
         training_dataset = ChinchillaDataset(problems_file=dataset)
         train_dataloader = DataLoader(training_dataset, batch_size=self.batch_size, shuffle=True)
 
+        val_dataset = ChinchillaDataset(problems_file="data/val.csv")
+        val_dataloader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True)
+
         metrics_history = {
             "train_loss": [],
+            "val_loss": [],
         }
 
         # ??????????
@@ -52,23 +59,29 @@ class BabyChilla:
                     ),
                 )
 
-                if (step + 1) % 200 == 0:
-                    for metric, value in self.metrics.compute().items():
-                        metrics_history[f"train_{metric}"].append(value)
-                    self.metrics.reset()
+            for metric, value in self.metrics.compute().items():
+                metrics_history[f"train_{metric}"].append(value)
+            self.metrics.reset()
 
-                    # elapsed_time = time.time() - start_time
-                    print(
-                        f"\n\nStep {step + 1}, Loss: {metrics_history['train_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
-                    )
-                    # start_time = time.time()
+            # elapsed_time = time.time() - start_time
+            print(
+                # f"\n\nStep {step + 1}, Loss: {metrics_history['train_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
+                f"Training Loss: {metrics_history['train_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds" 
+            )
+            # start_time = time.time()
 
-                step += 1
+            self.evaluate_model(val_dataloader)
+            for metric, value in self.val_metrics.compute().items():
+                metrics_history[f"val_{metric}"].append(value)
+                self.val_metrics.reset()
+            print(
+                # f"\n\nVal Step {step + 1}, Val Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
+                f"Validation Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
+            )
 
 
     def loss_fn(self, model, batch):
         logits = model(batch[0])
-        print(nnx.softmax(logits, axis=-1))
         loss = optax.softmax_cross_entropy_with_integer_labels(logits=logits, labels=batch[1]).mean()
         # print(loss)
         return loss, logits
@@ -80,3 +93,20 @@ class BabyChilla:
         (loss, logits), grads = grad_fn(self.model, batch)
         self.metrics.update(loss=loss, logits=logits, lables=batch[1])
         self.optimizer.update(self.model, grads)
+
+    def evaluate_model(self, val_dataloader):
+        # Computes the metrics on the training and test sets after each training epoch.
+        self.val_metrics.reset()  # Reset the eval metrics
+        for (inputs, labels) in val_dataloader:
+            inputs, labels = jnp.array(inputs, dtype=int), jnp.array(labels, dtype=int) # convert to jax.numpy arrays
+            self.eval_step(jax.device_put(
+                                    (inputs.T, labels), # P("batch", None)
+                                ),)
+
+    def eval_step(self, batch: tuple[jax.Array, jax.Array]):
+        (loss, logits) = self.loss_fn(self.model, batch)
+        self.val_metrics.update(
+            loss=loss,
+            logits=logits,
+            labels=batch[1],
+        )

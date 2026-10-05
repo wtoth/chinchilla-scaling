@@ -1,9 +1,12 @@
+import os
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P, reshard
 
 import flax.nnx as nnx
 import optax
+from orbax.checkpoint import v1 as ocp
+from etils import epath
 
 from tqdm import tqdm
 from dataset import ChinchillaDataset
@@ -14,6 +17,8 @@ class BabyChilla:
         self.model = model
         self.batch_size = batch_size
         self.num_epochs = num_epochs
+        self.training_checkpointer = ocp.training
+        self.weight_dir = os.path.abspath("weight_dir")
         self.optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
         self.metrics = nnx.MultiMetric(
             loss=nnx.metrics.Average("loss"),
@@ -23,61 +28,72 @@ class BabyChilla:
         )
 
     def train(self, dataset="data/train.csv"):
-        training_dataset = ChinchillaDataset(problems_file=dataset)
-        train_dataloader = DataLoader(training_dataset, batch_size=self.batch_size, shuffle=True)
 
-        val_dataset = ChinchillaDataset(problems_file="data/val.csv")
-        val_dataloader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True)
+        with self.training_checkpointer.Checkpointer(self.weight_dir,) as ckptr:
+            training_dataset = ChinchillaDataset(problems_file=dataset)
+            train_dataloader = DataLoader(training_dataset, batch_size=self.batch_size, shuffle=True)
 
-        metrics_history = {
-            "train_loss": [],
-            "val_loss": [],
-        }
+            val_dataset = ChinchillaDataset(problems_file="data/val.csv")
+            val_dataloader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True)
 
-        # ??????????
-        prep_target_batch = jax.vmap(
-            lambda tokens: jnp.concatenate((tokens[1:], jnp.array([0])))
-        )
+            metrics_history = {
+                "train_loss": [],
+                "val_loss": [],
+            }
 
-        step = 0
-        for epoch in range(self.num_epochs):
-            # start_time = time.time()
-            for i, (inputs, labels) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}")):
-                # print(inputs, labels)
-                inputs, labels = jnp.array(inputs, dtype=int), jnp.array(labels, dtype=int) # convert to jax.numpy arrays
-            # for batch in train_dataloader:
-                if len(inputs) % len(jax.devices()) != 0: 
-                    continue  # skip the remaining elements
-                # input_batch = jnp.stack(batch).T # ???????S
-                # target_batch = prep_target_batch(input_batch) # ???????
-                self.train_step(
-                    # self.model,
-                    # self.optimizer,
-                    # self.metrics,
-                    jax.device_put(
-                        (inputs.T, labels), # P("batch", None)
-                    ),
+            # ??????????
+            prep_target_batch = jax.vmap(
+                lambda tokens: jnp.concatenate((tokens[1:], jnp.array([0])))
+            )
+
+            step = 0
+            for epoch in range(self.num_epochs):
+                # start_time = time.time()
+                for i, (inputs, labels) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}")):
+                    # print(inputs, labels)
+                    inputs, labels = jnp.array(inputs, dtype=int), jnp.array(labels, dtype=int) # convert to jax.numpy arrays
+                # for batch in train_dataloader:
+                    if len(inputs) % len(jax.devices()) != 0: 
+                        continue  # skip the remaining elements
+                    # input_batch = jnp.stack(batch).T # ???????S
+                    # target_batch = prep_target_batch(input_batch) # ???????
+                    self.train_step(
+                        # self.model,
+                        # self.optimizer,
+                        # self.metrics,
+                        jax.device_put(
+                            (inputs.T, labels), # P("batch", None)
+                        ),
+                    )
+
+                for metric, value in self.metrics.compute().items():
+                    metrics_history[f"train_{metric}"].append(value)
+                self.metrics.reset()
+
+                # elapsed_time = time.time() - start_time
+                print(
+                    # f"\n\nStep {step + 1}, Loss: {metrics_history['train_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
+                    f"Training Loss: {metrics_history['train_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds" 
+                )
+                # start_time = time.time()
+
+                self.evaluate_model(val_dataloader)
+                for metric, value in self.val_metrics.compute().items():
+                    metrics_history[f"val_{metric}"].append(value)
+                    self.val_metrics.reset()
+                print(
+                    # f"\n\nVal Step {step + 1}, Val Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
+                    f"Validation Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
                 )
 
-            for metric, value in self.metrics.compute().items():
-                metrics_history[f"train_{metric}"].append(value)
-            self.metrics.reset()
+                # Save the combined state
+                state = {
+                    'params': nnx.state(self.model),
+                    'optimizer': nnx.state(self.optimizer, nnx.optimizer.OptState),
+                }
+                # ckptr.save(step, state)
+                step += 1
 
-            # elapsed_time = time.time() - start_time
-            print(
-                # f"\n\nStep {step + 1}, Loss: {metrics_history['train_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
-                f"Training Loss: {metrics_history['train_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds" 
-            )
-            # start_time = time.time()
-
-            self.evaluate_model(val_dataloader)
-            for metric, value in self.val_metrics.compute().items():
-                metrics_history[f"val_{metric}"].append(value)
-                self.val_metrics.reset()
-            print(
-                # f"\n\nVal Step {step + 1}, Val Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
-                f"Validation Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
-            )
 
 
     def loss_fn(self, model, batch):

@@ -11,9 +11,9 @@ def generate_dataset(filename: str,size: int, destination: str = "data") -> str:
     pd.DataFrame(data, columns=["problems"]).to_csv(f"{destination}/{filename}")
     
 
-train_size = 1000
-val_size = 200
-test_size = 200
+train_size = 20000
+val_size = 1000
+test_size = 1000
 
 generate_dataset("train.csv", train_size)
 generate_dataset("val.csv", val_size)

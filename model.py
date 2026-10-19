@@ -34,6 +34,15 @@ class BabyChillaModel(nnx.Module):
         out = self.output_layer(x)
         return out
 
+    def get_num_params(self, exclude_embedding=True):
+        def count(module):
+            return sum(x.size for x in jax.tree.leaves(nnx.state(module, nnx.Param)))
+
+        n_params = count(self)
+        if exclude_embedding:
+            n_params -= count(self.token_pos_emb)
+        return n_params
+
 # Transformer blocks made up for Transformer layers followed by MLP or MoE
 class TransformerBlock(nnx.Module):
     def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, MoE: bool, num_experts: int, active_experts: int, rngs: nnx.Rngs):

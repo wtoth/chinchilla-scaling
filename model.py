@@ -45,13 +45,13 @@ class BabyChillaModel(nnx.Module):
 
 # Transformer blocks made up for Transformer layers followed by MLP or MoE
 class TransformerBlock(nnx.Module):
-    def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, MoE: bool, num_experts: int, active_experts: int, rngs: nnx.Rngs):
+    def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, MoE: bool, k: int, num_experts: int, active_experts: int, rngs: nnx.Rngs):
         self.transformer = TransformerLayer(embed_dim, num_heads, rngs=rngs)
         
         if not MoE:
             self.ffw = MLP(input_dim=embed_dim, ffw_dim=ffw_dim, output_dim=embed_dim, rngs=rngs)
         else:
-            self.ffw = MoE(ffw_dim, num_experts, active_experts)
+            self.ffw = MoE(input_dim=embed_dim, ffw_dim=ffw_dim, output_dim=embed_dim, num_experts=num_experts, active_experts=active_experts, rngs=rngs)
 
     def __call__(self, inputs):
         #print(inputs)
@@ -109,11 +109,50 @@ class MLP(nnx.Module):
         
 
 class MoE(nnx.Module):
-    def __init__(self):
-        pass
+    def __init__(self, input_dim, ffw_dim, output_dim, num_experts, active_experts, rngs):
+        self.num_experts = num_experts
+        self.active_experts = active_experts
+
+        self.layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=input_dim, rngs=rngs)
+        self.router = nnx.Linear(input_dim, num_experts, rngs=rngs)
+
+        self.linear1 = nnx.Linear(input_dim, ffw_dim, rngs=rngs)
+        self.linear2 = nnx.Linear(ffw_dim, input_dim, rngs=rngs)
 
     def __call__(self, inputs):
-        pass
+        batch, seq_len, emb_dim = inputs.shape
+        input_norm = self.layer_norm(inputs) # pre-norm is generally standard and agrees with 
+
+        # this needs to be by token not by sequence
+        # input size is [batch, seq_len, emb_dim]
+        # want to combine batch & seq_len to get [tokens, emb_dim]
+        # pass through router so we get [tokens, num_experts] and softmax
+        # Take top_k here then sort into a new array
+        # Chunk and pad via the largest chunk
+        # Pass into jax.lax.ragged_dot(lhs, rhs, group_sizes)
+        # Where group_sizes is the largest chunk we padded to
+        
+        tokens = input.reshape(batch*seq_len, emb_dim) # reshape to [tokens, emb_dim]
+        routed_inputs = nnx.softmax(self.router(tokens), axis=0) # should return [tokens, num_experts] softmax on the batch dimension
+        top_k = jax.lax.top_k(routed_inputs, self.active_experts, axis=0) # returns [tokens, (values, indices)]
+
+        # break into chunks
+        # this is a naive way and should be rewritten
+        largest_chunk = 0
+        chunks = []
+        for i in range(self.num_experts):
+            curr_chunk = []
+            for i, (value, _) in enumerate(top_k):
+                for val in value:
+                    if val == i:
+                        curr_chunk.append(tokens[i])
+            largest_chunk = max(largest_chunk, len(curr_chunk))
+            chunks.append(curr_chunk)
+
+        # padding
+
+        # jax.lax.ragged_dot a meme at this point
+
 
 
 class TokenAndPositionalEmbeddings(nnx.Module):

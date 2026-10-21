@@ -116,8 +116,8 @@ class MoE(nnx.Module):
         self.layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=input_dim, rngs=rngs)
         self.router = nnx.Linear(input_dim, num_experts, rngs=rngs)
 
-        self.linear1 = nnx.Linear(input_dim, ffw_dim, rngs=rngs)
-        self.linear2 = nnx.Linear(ffw_dim, input_dim, rngs=rngs)
+        self.ffn_up = nnx.Param(jax.random.uniform(rngs(), (num_experts, input_dim, ffw_dim)))
+        self.ffn_out = nnx.Param(jax.random.uniform(rngs(), (num_experts, ffw_dim, output_dim)))
 
     def __call__(self, inputs):
         batch, seq_len, emb_dim = inputs.shape
@@ -138,20 +138,35 @@ class MoE(nnx.Module):
 
         # break into chunks
         # this is a naive way and should be rewritten
-        largest_chunk = 0
-        chunks = []
-        for i in range(self.num_experts):
-            curr_chunk = []
-            for i, (value, _) in enumerate(top_k):
-                for val in value:
-                    if val == i:
-                        curr_chunk.append(tokens[i])
-            largest_chunk = max(largest_chunk, len(curr_chunk))
-            chunks.append(curr_chunk)
+        expert_hit_counter = jnp.zeros(self.num_experts) # count how many hits each expert has
+        # max this later to cut down on size
+        chunks = jnp.zeros((self.num_experts, batch*seq_len, emb_dim))
+        for i, (expert_id, _) in enumerate(top_k):
+            chunks[expert_id][expert_hit_counter[expert_id]] = routed_inputs[i]
+            expert_hit_counter = expert_hit_counter.at[expert_id].add(1)
 
-        # padding
+        # Get the max number of tokens per expert
+        max_tokens_per_expert = jnp.max(expert_hit_counter).item()
+        # since we are padding by default cut down the padding using max_tokens_per_expert
+        chunks = chunks[:, 0:max_tokens_per_expert, :]
 
         # jax.lax.ragged_dot a meme at this point
+        # there is something wrong here. we should have [m, k] @ [E, k, n] -> [m, n] but both are 3 dimensions
+        ragged_up = jax.lax.ragged_dot(self.ffn_up, chunks, max_tokens_per_expert) # this is wrong
+        ragged_up = nnx.relu(ragged_up)
+        ragged_out = jax.lax.ragged_dot(self.ffn_out, ragged_up, max_tokens_per_expert)
+
+        # reorder and reshape
+
+
+        # get auxiliary loss
+        aux_loss = self.auxiliary_loss()
+
+        # return
+        return output, aux_loss
+
+    def auxiliary_loss(self):
+        pass
 
 
 

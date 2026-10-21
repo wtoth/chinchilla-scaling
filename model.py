@@ -116,8 +116,8 @@ class MoE(nnx.Module):
         self.layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=input_dim, rngs=rngs)
         self.router = nnx.Linear(input_dim, num_experts, rngs=rngs)
 
-        self.ffn_up = nnx.Param(jax.random.uniform(rngs(), (num_experts, input_dim, ffw_dim)))
-        self.ffn_out = nnx.Param(jax.random.uniform(rngs(), (num_experts, ffw_dim, output_dim)))
+        self.ffn_up = nnx.Param(nnx.initializers.lecun_normal()(rngs.params(), (num_experts, input_dim, ffw_dim)))
+        self.ffn_out = nnx.Param(nnx.initializers.lecun_normal()(rngs.params(), (num_experts, ffw_dim, output_dim)))
 
     def __call__(self, inputs):
         batch, seq_len, emb_dim = inputs.shape
@@ -128,36 +128,39 @@ class MoE(nnx.Module):
         # want to combine batch & seq_len to get [tokens, emb_dim]
         # pass through router so we get [tokens, num_experts] and softmax
         # Take top_k here then sort into a new array
-        # Chunk and pad via the largest chunk
         # Pass into jax.lax.ragged_dot(lhs, rhs, group_sizes)
-        # Where group_sizes is the largest chunk we padded to
+        # ragged_up
+        # lhs [tokens, emb_dim] This is my input
+        # rhs [Experts, emb_dim, ffw_dim] Params
+        # ragged_down
+        # lhs [tokens, ffw_dim] This is my input
+        # rhs [Experts, ffw_dim, output_dim] Params
+        # Where group_sizes is the number of tokens per Expert
         
-        tokens = input.reshape(batch*seq_len, emb_dim) # reshape to [tokens, emb_dim]
+        tokens = inputs.reshape(batch*seq_len, emb_dim) # reshape to [tokens, emb_dim]
         routed_inputs = nnx.softmax(self.router(tokens), axis=0) # should return [tokens, num_experts] softmax on the batch dimension
-        top_k = jax.lax.top_k(routed_inputs, self.active_experts, axis=0) # returns [tokens, (values, indices)]
+        top_k_vals, top_k_indices  = jax.lax.top_k(routed_inputs, self.active_experts, axis=-1) # returns [values, indices]
 
-        # break into chunks
-        # this is a naive way and should be rewritten
-        expert_hit_counter = jnp.zeros(self.num_experts) # count how many hits each expert has
-        # max this later to cut down on size
-        chunks = jnp.zeros((self.num_experts, batch*seq_len, emb_dim))
-        for i, (expert_id, _) in enumerate(top_k):
-            chunks[expert_id][expert_hit_counter[expert_id]] = routed_inputs[i]
-            expert_hit_counter = expert_hit_counter.at[expert_id].add(1)
+        # I am sure this isn't jax best practice but it scales to multiple experts for now
+        experts = [[i, expert_num] for i, experts in enumerate(top_k_indices) for expert_num in experts]
+        sorted_experts = sorted(experts, key=lambda x: x[1])
+        expert_order = jnp.array([x[0] for x in sorted_experts]) # this should be an array of indexes 
+        expert_counts = jnp.array([x[1] for x in sorted_experts]) # this is an array of which expert each token uses. Here to calculate group sizes
 
-        # Get the max number of tokens per expert
-        max_tokens_per_expert = jnp.max(expert_hit_counter).item()
-        # since we are padding by default cut down the padding using max_tokens_per_expert
-        chunks = chunks[:, 0:max_tokens_per_expert, :]
+        tokens_ordered_by_expert = routed_inputs[expert_order] # [tokens, emb_dim] ordered by their expert
+        #print(tokens_ordered_by_expert)
+        group_sizes = jnp.bincount(expert_counts)
 
         # jax.lax.ragged_dot a meme at this point
         # there is something wrong here. we should have [m, k] @ [E, k, n] -> [m, n] but both are 3 dimensions
-        ragged_up = jax.lax.ragged_dot(self.ffn_up, chunks, max_tokens_per_expert) # this is wrong
+        ragged_up = jax.lax.ragged_dot(tokens_ordered_by_expert, self.ffn_up.value, group_sizes) # this is wrong
         ragged_up = nnx.relu(ragged_up)
-        ragged_out = jax.lax.ragged_dot(self.ffn_out, ragged_up, max_tokens_per_expert)
+        ragged_out = jax.lax.ragged_dot(ragged_up, self.ffn_out.value, group_sizes)
+        print(ragged_out)
 
         # reorder and reshape
-
+        expert_tokens = None # process ragged_out here
+        output = expert_tokens.reshape(batch, seq_len, emb_dim)
 
         # get auxiliary loss
         aux_loss = self.auxiliary_loss()
@@ -180,6 +183,9 @@ class TokenAndPositionalEmbeddings(nnx.Module):
         positions = jnp.arange(0, x.shape[1])[None, :]
         positional_embeddings = self.pos_emb(positions)
         return token_embeddings + positional_embeddings
+
+
+
 
 
 

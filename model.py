@@ -109,11 +109,13 @@ class MLP(nnx.Module):
         
 
 class MoE(nnx.Module):
-    def __init__(self, input_dim, ffw_dim, output_dim, num_experts, active_experts, rngs):
+    def __init__(self, alpha, input_dim, ffw_dim, output_dim, num_experts, active_experts, rngs):
+        self.alpha = alpha
         self.num_experts = num_experts
         self.active_experts = active_experts
 
-        self.layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=input_dim, rngs=rngs)
+        self.input_layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=input_dim, rngs=rngs)
+        self.output_layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=output_dim, rngs=rngs)
         self.router = nnx.Linear(input_dim, num_experts, rngs=rngs)
 
         self.ffn_up = nnx.Param(nnx.initializers.lecun_normal()(rngs.params(), (num_experts, input_dim, ffw_dim)))
@@ -121,7 +123,7 @@ class MoE(nnx.Module):
 
     def __call__(self, inputs):
         batch, seq_len, emb_dim = inputs.shape
-        input_norm = self.layer_norm(inputs) # pre-norm is generally standard and agrees with 
+        input_norm = self.input_layer_norm(inputs) # pre-norm is generally standard and agrees with 
 
         # this needs to be by token not by sequence
         # input size is [batch, seq_len, emb_dim]
@@ -147,7 +149,7 @@ class MoE(nnx.Module):
         expert_order = jnp.array([x[0] for x in sorted_experts]) # this should be an array of indexes 
         expert_counts = jnp.array([x[1] for x in sorted_experts]) # this is an array of which expert each token uses. Here to calculate group sizes
 
-        tokens_ordered_by_expert = routed_inputs[expert_order] # [tokens, emb_dim] ordered by their expert
+        tokens_ordered_by_expert = tokens[expert_order] # [tokens, emb_dim] ordered by their expert
         #print(tokens_ordered_by_expert)
         group_sizes = jnp.bincount(expert_counts)
 
@@ -159,17 +161,48 @@ class MoE(nnx.Module):
         print(ragged_out)
 
         # reorder and reshape
-        expert_tokens = None # process ragged_out here
-        output = expert_tokens.reshape(batch, seq_len, emb_dim)
+        expert_tokens = jnp.zeros_like(ragged_out) # [0]*len(ragged_out)
+        for i, expert_idx in enumerate(expert_order):
+            expert_tokens = expert_tokens.at[i].set(ragged_out[expert_idx])
+
+        # Sum and average across experts
+        expert_tokens = expert_tokens.reshape(batch, seq_len, self.active_experts, emb_dim)
+        summed_expert_tokens = expert_tokens.sum(axis=2)
+        normalized_expert_tokens = self.output_layer_norm(summed_expert_tokens)
+
+        output = normalized_expert_tokens.reshape(batch, seq_len, emb_dim)
 
         # get auxiliary loss
-        aux_loss = self.auxiliary_loss()
+        aux_loss = self.auxiliary_loss(alpha=self.alpha, N=self.num_experts, K=self.active_experts, routed_inputs=routed_inputs, top_k_indices=top_k_indices)
 
         # return
         return output, aux_loss
 
-    def auxiliary_loss(self):
-        pass
+    def auxiliary_loss(alpha, N, K, routed_inputs, top_k_indices):
+        T = len(routed_inputs)
+
+        def f(N):
+            vals = []
+            for i in range(N):
+                total = 0
+                for t in range(T):
+                    if i in top_k_indices[t]:
+                        total += 1
+                vals.append(N/(K*T)*total)
+            return jnp.array(vals)
+
+        def P(N):
+            vals = []
+            for i in range(N):
+                total = 0
+                for t in range(T):
+                    total += routed_inputs[t][i]
+                vals.append((1/T) * total)
+            return jnp.array(vals)
+
+        total_loss = alpha * (f(N) @ P(N))
+
+        return total_loss
 
 
 

@@ -8,13 +8,14 @@ import optax
 
 class BabyChillaModel(nnx.Module):
     def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, layers: int, rngs: nnx.Rngs, 
-                 MoE: bool= False, max_len: int=11, vocab_size: int=14, output_size: int=1999, 
+                 MoE: bool= False, alpha=1e-3, max_len: int=11, vocab_size: int=14, output_size: int=1999, 
                  num_experts: int=12, active_experts: int=4):
         self.token_pos_emb = TokenAndPositionalEmbeddings(embed_dim, rngs=rngs, max_len=max_len, vocab_size=vocab_size)
         self.transformer_blocks = nnx.Sequential(*[TransformerBlock(embed_dim=embed_dim,
                                                                     num_heads=num_heads,
                                                                     ffw_dim=ffw_dim, 
-                                                                    MoE=MoE,
+                                                                    is_MoE=MoE,
+                                                                    alpha=alpha,
                                                                     num_experts=num_experts,
                                                                     active_experts=active_experts,
                                                                     rngs=rngs) 
@@ -45,13 +46,13 @@ class BabyChillaModel(nnx.Module):
 
 # Transformer blocks made up for Transformer layers followed by MLP or MoE
 class TransformerBlock(nnx.Module):
-    def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, MoE: bool, k: int, num_experts: int, active_experts: int, rngs: nnx.Rngs):
+    def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, is_MoE: bool, alpha: int, num_experts: int, active_experts: int, rngs: nnx.Rngs):
         self.transformer = TransformerLayer(embed_dim, num_heads, rngs=rngs)
         
-        if not MoE:
+        if not is_MoE:
             self.ffw = MLP(input_dim=embed_dim, ffw_dim=ffw_dim, output_dim=embed_dim, rngs=rngs)
         else:
-            self.ffw = MoE(input_dim=embed_dim, ffw_dim=ffw_dim, output_dim=embed_dim, num_experts=num_experts, active_experts=active_experts, rngs=rngs)
+            self.ffw = MoE(alpha=alpha, input_dim=embed_dim, ffw_dim=ffw_dim, output_dim=embed_dim, num_experts=num_experts, active_experts=active_experts, rngs=rngs)
 
     def __call__(self, inputs):
         #print(inputs)
@@ -118,8 +119,8 @@ class MoE(nnx.Module):
         self.output_layer_norm = nnx.LayerNorm(epsilon=1e-6, num_features=output_dim, rngs=rngs)
         self.router = nnx.Linear(input_dim, num_experts, rngs=rngs)
 
-        self.ffn_up = nnx.Param(nnx.initializers.lecun_normal()(rngs.params(), (num_experts, input_dim, ffw_dim)))
-        self.ffn_out = nnx.Param(nnx.initializers.lecun_normal()(rngs.params(), (num_experts, ffw_dim, output_dim)))
+        self.ffn_up = nnx.Param(nnx.initializers.lecun_normal(batch_axis=0)(rngs.params(), (num_experts, input_dim, ffw_dim)))
+        self.ffn_out = nnx.Param(nnx.initializers.lecun_normal(batch_axis=0)(rngs.params(), (num_experts, ffw_dim, output_dim)))
 
     def __call__(self, inputs):
         batch, seq_len, emb_dim = inputs.shape
@@ -139,8 +140,8 @@ class MoE(nnx.Module):
         # rhs [Experts, ffw_dim, output_dim] Params
         # Where group_sizes is the number of tokens per Expert
         
-        tokens = inputs.reshape(batch*seq_len, emb_dim) # reshape to [tokens, emb_dim]
-        routed_inputs = nnx.softmax(self.router(tokens), axis=0) # should return [tokens, num_experts] softmax on the batch dimension
+        tokens = input_norm.reshape(batch*seq_len, emb_dim) # reshape to [tokens, emb_dim]
+        routed_inputs = nnx.softmax(self.router(tokens), axis=-1) # should return [tokens, num_experts] softmax
         top_k_vals, top_k_indices  = jax.lax.top_k(routed_inputs, self.active_experts, axis=-1) # returns [values, indices]
 
         # I am sure this isn't jax best practice but it scales to multiple experts for now
@@ -151,11 +152,10 @@ class MoE(nnx.Module):
 
         tokens_ordered_by_expert = tokens[expert_order] # [tokens, emb_dim] ordered by their expert
         #print(tokens_ordered_by_expert)
-        group_sizes = jnp.bincount(expert_counts)
+        group_sizes = jnp.bincount(expert_counts, length=self.num_experts)
 
         # jax.lax.ragged_dot a meme at this point
-        # there is something wrong here. we should have [m, k] @ [E, k, n] -> [m, n] but both are 3 dimensions
-        ragged_up = jax.lax.ragged_dot(tokens_ordered_by_expert, self.ffn_up.value, group_sizes) # this is wrong
+        ragged_up = jax.lax.ragged_dot(tokens_ordered_by_expert, self.ffn_up.value, group_sizes)
         ragged_up = nnx.relu(ragged_up)
         ragged_out = jax.lax.ragged_dot(ragged_up, self.ffn_out.value, group_sizes)
         print(ragged_out)
@@ -178,7 +178,7 @@ class MoE(nnx.Module):
         # return
         return output, aux_loss
 
-    def auxiliary_loss(alpha, N, K, routed_inputs, top_k_indices):
+    def auxiliary_loss(self, alpha, N, K, routed_inputs, top_k_indices):
         T = len(routed_inputs)
 
         def f(N):

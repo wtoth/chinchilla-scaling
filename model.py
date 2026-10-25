@@ -9,7 +9,7 @@ import optax
 class BabyChillaModel(nnx.Module):
     def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, layers: int, rngs: nnx.Rngs, 
                  MoE: bool= False, alpha=1e-3, max_len: int=11, vocab_size: int=14, output_size: int=1999, 
-                 num_experts: int=12, active_experts: int=4):
+                 num_experts: int=4, active_experts: int=1):
         self.token_pos_emb = TokenAndPositionalEmbeddings(embed_dim, rngs=rngs, max_len=max_len, vocab_size=vocab_size)
         self.transformer_blocks = nnx.Sequential(*[TransformerBlock(embed_dim=embed_dim,
                                                                     num_heads=num_heads,
@@ -27,13 +27,16 @@ class BabyChillaModel(nnx.Module):
         # print(x)
         x = self.token_pos_emb(x)
         # print(f"embeddings: {x}")
-        x = self.transformer_blocks(x)
+        total_aux_loss = 0.0
+        for transformer_block in self.transformer_blocks.layers:
+            x, aux_loss = transformer_block(x)
+            total_aux_loss += aux_loss
         # retrieve only one of the output points since we are doing classification instead of next token prediction
         # so the output is [num_batches, num_classes]
         #print(f"post transformer blocks {x}")
         x = x[:, 0] # idea from https://flax.readthedocs.io/en/stable/examples/vit_training.html
         out = self.output_layer(x)
-        return out
+        return out, total_aux_loss
 
     def get_num_params(self, exclude_embedding=True):
         def count(module):
@@ -58,9 +61,10 @@ class TransformerBlock(nnx.Module):
         #print(inputs)
         transformer_output = self.transformer(inputs) + inputs # residual connection
         #print(f"Transformer output: {transformer_output}")
-        ffw_output = self.ffw(transformer_output) + transformer_output # ffw residual connection? 
+        ffw_output, aux_loss = self.ffw(transformer_output) 
+        ffw_output += transformer_output # ffw residual connection? 
         #print(f"ffw output: {ffw_output}")
-        return ffw_output
+        return ffw_output, aux_loss
 
 class TransformerLayer(nnx.Module):
     def __init__(self, embed_dim: int, num_heads: int, rngs: nnx.Rngs,):
@@ -144,11 +148,15 @@ class MoE(nnx.Module):
         routed_inputs = nnx.softmax(self.router(tokens), axis=-1) # should return [tokens, num_experts] softmax
         top_k_vals, top_k_indices  = jax.lax.top_k(routed_inputs, self.active_experts, axis=-1) # returns [values, indices]
 
+
+        # THIS NEEDS TO BE REWRITTEN!!!!!!
         # I am sure this isn't jax best practice but it scales to multiple experts for now
         experts = [[i, expert_num] for i, experts in enumerate(top_k_indices) for expert_num in experts]
         sorted_experts = sorted(experts, key=lambda x: x[1])
         expert_order = jnp.array([x[0] for x in sorted_experts]) # this should be an array of indexes 
         expert_counts = jnp.array([x[1] for x in sorted_experts]) # this is an array of which expert each token uses. Here to calculate group sizes
+        # End here
+
 
         tokens_ordered_by_expert = tokens[expert_order] # [tokens, emb_dim] ordered by their expert
         #print(tokens_ordered_by_expert)
@@ -158,9 +166,10 @@ class MoE(nnx.Module):
         ragged_up = jax.lax.ragged_dot(tokens_ordered_by_expert, self.ffn_up.value, group_sizes)
         ragged_up = nnx.relu(ragged_up)
         ragged_out = jax.lax.ragged_dot(ragged_up, self.ffn_out.value, group_sizes)
-        print(ragged_out)
+        # print(ragged_out)
 
         # reorder and reshape
+        # I think this might be wrong too? 
         expert_tokens = jnp.zeros_like(ragged_out) # [0]*len(ragged_out)
         for i, expert_idx in enumerate(expert_order):
             expert_tokens = expert_tokens.at[i].set(ragged_out[expert_idx])

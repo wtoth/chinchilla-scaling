@@ -19,7 +19,7 @@ def main():
     ffw_dim=4*emb_dim
     output_size = 1999
     
-    model_instance = BabyChillaModel(emb_dim, num_heads, ffw_dim, num_layers, rngs=rngs, output_size=output_size)
+    model_instance = BabyChillaModel(emb_dim, num_heads, ffw_dim, num_layers, MoE=True, rngs=rngs, output_size=output_size)
     # print(f"# Params excluding embedding: {model_instance.get_num_params()}")
     # print(f"# Params with embedding: {model_instance.get_num_params(exclude_embedding=False)}")
     model = BabyChilla(model=model_instance, batch_size=batch_size, num_epochs=num_epochs)

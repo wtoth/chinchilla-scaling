@@ -97,17 +97,18 @@ class BabyChilla:
 
 
     def loss_fn(self, model, batch):
-        logits = model(batch[0])
+        logits, total_aux_loss = model(batch[0])
         loss = optax.softmax_cross_entropy_with_integer_labels(logits=logits, labels=batch[1]).mean()
+        loss += total_aux_loss # add aux loss
         # print(loss)
         return loss, logits
 
     # Define the training step with the `flax.nnx.jit` transformation decorator.
-    # @nnx.jit()
+    @nnx.jit(static_argnums=0)
     def train_step(self, batch):
         grad_fn = nnx.value_and_grad(self.loss_fn, has_aux=True)
         (loss, logits), grads = grad_fn(self.model, batch)
-        self.metrics.update(loss=loss, logits=logits, lables=batch[1])
+        self.metrics.update(loss=loss, logits=logits, labels=batch[1])
         self.optimizer.update(self.model, grads)
 
     def evaluate_model(self, val_dataloader):

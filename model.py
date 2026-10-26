@@ -148,19 +148,14 @@ class MoE(nnx.Module):
         routed_inputs = nnx.softmax(self.router(tokens), axis=-1) # should return [tokens, num_experts] softmax
         top_k_vals, top_k_indices  = jax.lax.top_k(routed_inputs, self.active_experts, axis=-1) # returns [values, indices]
 
-
-        # THIS NEEDS TO BE REWRITTEN!!!!!!
-        # I am sure this isn't jax best practice but it scales to multiple experts for now
-        experts = [[i, expert_num] for i, experts in enumerate(top_k_indices) for expert_num in experts]
-        sorted_experts = sorted(experts, key=lambda x: x[1])
-        expert_order = jnp.array([x[0] for x in sorted_experts]) # this should be an array of indexes 
-        expert_counts = jnp.array([x[1] for x in sorted_experts]) # this is an array of which expert each token uses. Here to calculate group sizes
-        # End here
+        flattened_expert_order = top_k_indices.flatten() # [tokens*active_params]
+        expert_order_arange = jnp.arange(0, len(flattened_expert_order), 1)
+        experts = jnp.stack([expert_order_arange, flattened_expert_order], axis=0) # [tokens*active_params, 2] 0: [0, n-1] 1: unordered experts
+        sorted_experts = experts[:, jnp.argsort(experts[1])]
 
 
-        tokens_ordered_by_expert = tokens[expert_order] # [tokens, emb_dim] ordered by their expert
-        #print(tokens_ordered_by_expert)
-        group_sizes = jnp.bincount(expert_counts, length=self.num_experts)
+        tokens_ordered_by_expert = jnp.repeat(tokens, self.active_experts, axis=0)[sorted_experts[0]] # [tokens, emb_dim] ordered by their expert
+        group_sizes = jnp.bincount(sorted_experts, length=self.num_experts)
 
         # jax.lax.ragged_dot a meme at this point
         ragged_up = jax.lax.ragged_dot(tokens_ordered_by_expert, self.ffn_up.value, group_sizes)
@@ -169,14 +164,15 @@ class MoE(nnx.Module):
         # print(ragged_out)
 
         # reorder and reshape
-        # I think this might be wrong too? 
-        expert_tokens = jnp.zeros_like(ragged_out) # [0]*len(ragged_out)
-        for i, expert_idx in enumerate(expert_order):
-            expert_tokens = expert_tokens.at[i].set(ragged_out[expert_idx])
+        sorted_experts_arange = jnp.arange(0, len(sorted_experts[1]), 1)
+        experts = jnp.stack([sorted_experts_arange, sorted_experts[0]], axis=0) # [tokens*active_params, 2] 0: [0, n-1] 1: unordered experts
+        token_og_order = experts[:, jnp.argsort(experts[1])]
+        expert_tokens = ragged_out[token_og_order[0]]
 
         # Sum and average across experts
         expert_tokens = expert_tokens.reshape(batch, seq_len, self.active_experts, emb_dim)
-        summed_expert_tokens = expert_tokens.sum(axis=2)
+        weights = top_k_vals.reshape(batch, seq_len, self.active_experts, 1)
+        summed_expert_tokens = (expert_tokens * weights).sum(axis=2)
         normalized_expert_tokens = self.output_layer_norm(summed_expert_tokens)
 
         output = normalized_expert_tokens.reshape(batch, seq_len, emb_dim)

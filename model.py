@@ -155,7 +155,7 @@ class MoE(nnx.Module):
 
 
         tokens_ordered_by_expert = jnp.repeat(tokens, self.active_experts, axis=0)[sorted_experts[0]] # [tokens, emb_dim] ordered by their expert
-        group_sizes = jnp.bincount(sorted_experts, length=self.num_experts)
+        group_sizes = jnp.bincount(sorted_experts[1], length=self.num_experts)
 
         # jax.lax.ragged_dot a meme at this point
         ragged_up = jax.lax.ragged_dot(tokens_ordered_by_expert, self.ffn_up.value, group_sizes)
@@ -186,28 +186,10 @@ class MoE(nnx.Module):
     def auxiliary_loss(self, alpha, N, K, routed_inputs, top_k_indices):
         T = len(routed_inputs)
 
-        def f(N):
-            vals = []
-            for i in range(N):
-                total = 0
-                for t in range(T):
-                    if i in top_k_indices[t]:
-                        total += 1
-                vals.append(N/(K*T)*total)
-            return jnp.array(vals)
-
-        def P(N):
-            vals = []
-            for i in range(N):
-                total = 0
-                for t in range(T):
-                    total += routed_inputs[t][i]
-                vals.append((1/T) * total)
-            return jnp.array(vals)
-
-        total_loss = alpha * (f(N) @ P(N))
-
-        return total_loss
+        F = N/(K*T) * jnp.bincount(top_k_indices.flatten(), length = N) # flatten, count by # of experts, then multiply
+        P = jnp.average(routed_inputs, axis=0) # take the average over the experts dimension
+    
+        return alpha * (F @ P)
 
 
 

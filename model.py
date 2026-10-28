@@ -110,7 +110,7 @@ class MLP(nnx.Module):
         input_norm = self.layer_norm(inputs)
         x = jax.nn.relu(self.linear1(input_norm))
         out = self.linear2(x)
-        return out
+        return out, 0.0
         
 
 class MoE(nnx.Module):

@@ -104,12 +104,17 @@ class BabyChilla:
         return loss, logits
 
     # Define the training step with the `flax.nnx.jit` transformation decorator.
-    @nnx.jit(static_argnums=0)
+    # @nnx.jit(static_argnums=0)
+    # @nnx.jit(donate_argnums=(1,))
     def train_step(self, batch):
-        grad_fn = nnx.value_and_grad(self.loss_fn, has_aux=True)
-        (loss, logits), grads = grad_fn(self.model, batch)
-        self.metrics.update(loss=loss, logits=logits, labels=batch[1])
-        self.optimizer.update(self.model, grads)
+        @nnx.jit(static_argnames="loss_fn")
+        def _jitted_step(model, loss_fn, metrics, optimizer, batch):
+            grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+            (loss, logits), grads = grad_fn(model, batch)
+            metrics.update(loss=loss, logits=logits, labels=batch[1])
+            optimizer.update(model, grads)
+
+        return _jitted_step(self.model, self.loss_fn, self.metrics, self.optimizer, batch)
 
     def evaluate_model(self, val_dataloader):
         # Computes the metrics on the training and test sets after each training epoch.

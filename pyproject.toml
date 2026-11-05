@@ -13,4 +13,5 @@ dependencies = [
     "pandas>=3.0.6",
     "torch>=2.14.0",
     "tqdm>=4.70.1",
+    "wandb>=0.31.0",
 ]

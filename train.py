@@ -8,18 +8,22 @@ import optax
 from orbax.checkpoint import v1 as ocp
 from etils import epath
 
+import wandb
 from tqdm import tqdm
 from dataset import ChinchillaDataset
 from torch.utils.data import Dataset, DataLoader
 
 class BabyChilla:
-    def __init__(self, model, batch_size, num_epochs):
+    def __init__(self, model, batch_size, num_epochs, log=True, log_every=100):
         self.model = model
         self.batch_size = batch_size
         self.num_epochs = num_epochs
+        self.log = log
+        self.log_every = log_every
+        self.learning_rate = 1e-3
         self.training_checkpointer = ocp.training
         self.weight_dir = os.path.abspath("weight_dir")
-        self.optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
+        self.optimizer = nnx.Optimizer(model, optax.adam(self.learning_rate), wrt=nnx.Param)
         self.metrics = nnx.MultiMetric(
             loss=nnx.metrics.Average("loss"),
         )
@@ -27,7 +31,10 @@ class BabyChilla:
             loss=nnx.metrics.Average("loss"),
         )
 
+
     def train(self, dataset="data/train.csv"):
+        if self.log:
+            self.init_logging(self.batch_size, self.learning_rate, self.num_epochs)
 
         with self.training_checkpointer.Checkpointer(self.weight_dir,) as ckptr:
             training_dataset = ChinchillaDataset(problems_file=dataset)
@@ -57,7 +64,7 @@ class BabyChilla:
                         continue  # skip the remaining elements
                     # input_batch = jnp.stack(batch).T # ???????S
                     # target_batch = prep_target_batch(input_batch) # ???????
-                    self.train_step(
+                    loss = self.train_step(
                         # self.model,
                         # self.optimizer,
                         # self.metrics,
@@ -65,6 +72,9 @@ class BabyChilla:
                             (inputs.T, labels), # P("batch", None)
                         ),
                     )
+                    global_step = epoch * len(train_dataloader) + i
+                    if self.log and global_step % self.log_every == 0:
+                        wandb.log({"train/loss": float(loss), "epoch": epoch}, step=global_step)
 
                 for metric, value in self.metrics.compute().items():
                     metrics_history[f"train_{metric}"].append(value)
@@ -85,6 +95,8 @@ class BabyChilla:
                     # f"\n\nVal Step {step + 1}, Val Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
                     f"Validation Loss: {metrics_history['val_loss'][-1]}" # , Elapsed Time: {elapsed_time:.2f} seconds"
                 )
+                if self.log:
+                    wandb.log({"val/loss": float(metrics_history["val_loss"][-1])}, step=(epoch + 1) * len(train_dataloader))
 
                 # Save the combined state
                 state = {
@@ -93,7 +105,8 @@ class BabyChilla:
                 }
                 # ckptr.save(step, state)
                 step += 1
-
+        if self.log:
+            wandb.finish()
 
 
     def loss_fn(self, model, batch):
@@ -113,6 +126,7 @@ class BabyChilla:
             (loss, logits), grads = grad_fn(model, batch)
             metrics.update(loss=loss, logits=logits, labels=batch[1])
             optimizer.update(model, grads)
+            return loss
 
         return _jitted_step(self.model, self.loss_fn, self.metrics, self.optimizer, batch)
 
@@ -132,3 +146,19 @@ class BabyChilla:
             logits=logits,
             labels=batch[1],
         )
+
+    def init_logging(self, batch_size, learning_rate, num_epochs):
+        wandb_log = wandb.init(
+            entity="wtoth21",
+            # Set the wandb project where this run will be logged.
+            project="ChinchillaScaling",
+            # Track hyperparameters and run metadata.
+            config={
+                "architecture": "Transformer",
+                "MoE": self.model.MoE,
+                "dataset": "Chinchilla",
+                "batch_size": batch_size,
+                "learning_rate": learning_rate,
+                "epochs": num_epochs,
+            })
+        return wandb_log

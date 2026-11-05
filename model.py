@@ -10,11 +10,12 @@ class BabyChillaModel(nnx.Module):
     def __init__(self, embed_dim: int, num_heads: int, ffw_dim: int, layers: int, rngs: nnx.Rngs, 
                  MoE: bool= False, alpha=1e-3, max_len: int=11, vocab_size: int=14, output_size: int=1999, 
                  num_experts: int=4, active_experts: int=1):
+        self.MoE = MoE
         self.token_pos_emb = TokenAndPositionalEmbeddings(embed_dim, rngs=rngs, max_len=max_len, vocab_size=vocab_size)
         self.transformer_blocks = nnx.Sequential(*[TransformerBlock(embed_dim=embed_dim,
                                                                     num_heads=num_heads,
                                                                     ffw_dim=ffw_dim, 
-                                                                    is_MoE=MoE,
+                                                                    is_MoE=self.MoE,
                                                                     alpha=alpha,
                                                                     num_experts=num_experts,
                                                                     active_experts=active_experts,

@@ -32,7 +32,7 @@ class BabyChilla:
         )
 
 
-    def train(self, dataset="data/train.csv"):
+    def train(self, dataset="data/train.csv", val_dataset="data/val.csv"):
         if self.log:
             self.init_logging(self.batch_size, self.learning_rate, self.num_epochs)
 
@@ -40,7 +40,7 @@ class BabyChilla:
             training_dataset = ChinchillaDataset(problems_file=dataset)
             train_dataloader = DataLoader(training_dataset, batch_size=self.batch_size, shuffle=True)
 
-            val_dataset = ChinchillaDataset(problems_file="data/val.csv")
+            val_dataset = ChinchillaDataset(problems_file=val_dataset)
             val_dataloader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True)
 
             metrics_history = {
